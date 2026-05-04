@@ -1,4 +1,4 @@
-# subwatch
+# SUBS
 
 A Rust CLI tool for analysing StatsBomb open football event data and recommending substitutions based on player fatigue.
 
