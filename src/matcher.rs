@@ -13,10 +13,14 @@ const ACTIVE_TYPES: &[&str] = &[
     "Dribble",
 ];
 
+const DECAY_THRESHOLD: f64 = 0.25;
+
 #[allow(dead_code)]
 pub struct BenchCandidate {
     pub player_name: String,
-    pub position: String,
+    pub position: String,      // abbreviated, for display
+    pub position_full: String, // full StatsBomb string, for group matching
+    pub jersey_number: u8,
     pub total_actions: u32,
     pub press_count: u32,
     pub duel_won_count: u32,
@@ -25,39 +29,69 @@ pub struct BenchCandidate {
 
 pub struct Recommendation {
     pub tactical_problem: String,
-    pub take_off: Vec<(String, String, f64)>, // (name, pos, decay_score)
+    pub take_off: Vec<(String, String, f64)>, // (name, pos_abbrev, decay_score)
     pub bring_on: Vec<BenchCandidate>,
 }
 
-fn problem_for_pos(pos: &str) -> &'static str {
-    if pos.contains("CB") || pos == "GK" {
-        "Defensive stability weakening"
-    } else if pos == "LB" || pos == "RB" || pos.contains("WB") {
-        "Flank coverage dropping"
-    } else if pos.contains("CM") || pos.contains("DM") {
-        "Midfield press collapsing"
-    } else if pos == "LW" || pos == "RW" || pos == "AM" || pos == "LM" || pos == "RM" {
-        "Attacking width lost"
-    } else if pos.contains("CF") || pos == "SS" {
-        "Striker pressing fading"
-    } else {
-        "General fatigue"
+// Map full StatsBomb position string → tactical problem label
+fn problem_for_pos_full(pos: &str) -> &'static str {
+    match pos {
+        "Goalkeeper" => "Goalkeeper fatigue",
+        "Center Back" | "Left Center Back" | "Right Center Back" => {
+            "Defensive stability weakening"
+        }
+        "Left Back" | "Right Back" | "Left Wing Back" | "Right Wing Back" => {
+            "Flank coverage dropping"
+        }
+        "Center Midfield"
+        | "Left Center Midfield"
+        | "Right Center Midfield"
+        | "Center Defensive Midfield"
+        | "Left Defensive Midfield"
+        | "Right Defensive Midfield"
+        | "Defensive Midfield" => "Midfield press collapsing",
+        "Left Wing"
+        | "Right Wing"
+        | "Left Midfield"
+        | "Right Midfield"
+        | "Center Attacking Midfield"
+        | "Left Attacking Midfield"
+        | "Right Attacking Midfield"
+        | "Attacking Midfield" => "Attacking width lost",
+        "Center Forward"
+        | "Left Center Forward"
+        | "Right Center Forward"
+        | "Secondary Striker" => "Striker pressing fading",
+        _ => "General fatigue",
     }
 }
 
-fn pos_group(pos: &str) -> &'static str {
-    if pos.contains("CB") || pos == "GK" {
-        "def_central"
-    } else if pos == "LB" || pos == "RB" || pos.contains("WB") {
-        "def_flank"
-    } else if pos.contains("CM") || pos.contains("DM") {
-        "mid"
-    } else if pos == "LW" || pos == "RW" || pos == "AM" || pos == "LM" || pos == "RM" {
-        "att_wide"
-    } else if pos.contains("CF") || pos == "SS" {
-        "att_central"
-    } else {
-        "unknown"
+// Map full StatsBomb position string → position group for bench matching
+fn pos_group_full(pos: &str) -> &'static str {
+    match pos {
+        "Goalkeeper" => "gk",
+        "Center Back" | "Left Center Back" | "Right Center Back" => "def_central",
+        "Left Back" | "Right Back" | "Left Wing Back" | "Right Wing Back" => "def_flank",
+        "Center Midfield"
+        | "Left Center Midfield"
+        | "Right Center Midfield"
+        | "Center Defensive Midfield"
+        | "Left Defensive Midfield"
+        | "Right Defensive Midfield"
+        | "Defensive Midfield" => "mid",
+        "Left Wing"
+        | "Right Wing"
+        | "Left Midfield"
+        | "Right Midfield"
+        | "Center Attacking Midfield"
+        | "Left Attacking Midfield"
+        | "Right Attacking Midfield"
+        | "Attacking Midfield" => "att_wide",
+        "Center Forward"
+        | "Left Center Forward"
+        | "Right Center Forward"
+        | "Secondary Striker" => "att_central",
+        _ => "unknown",
     }
 }
 
@@ -77,6 +111,7 @@ pub fn recommend(
     team: &str,
     decay_scores: &[DecayScore],
     current_minute: u32,
+    verbose: bool,
 ) -> Option<Recommendation> {
     let lineup = if state.home_lineup.team_name.eq_ignore_ascii_case(team) {
         &state.home_lineup
@@ -140,10 +175,10 @@ pub fn recommend(
         })
         .collect();
 
-    // Top fatigued field players (score > 0.40, already sorted by decay_scores)
+    // Top fatigued field players above threshold, using full position for problem detection
     let fatigued: Vec<&DecayScore> = decay_scores
         .iter()
-        .filter(|s| field_names.contains(s.player_name.as_str()) && s.score > 0.40)
+        .filter(|s| field_names.contains(s.player_name.as_str()) && s.score > DECAY_THRESHOLD)
         .take(3)
         .collect();
 
@@ -151,10 +186,12 @@ pub fn recommend(
         return None;
     }
 
-    // Dominant tactical problem across top fatigued players
+    // Dominant tactical problem across top fatigued field players (full string matching)
     let mut problem_counts: HashMap<&str, usize> = HashMap::new();
     for s in &fatigued {
-        *problem_counts.entry(problem_for_pos(&s.position)).or_insert(0) += 1;
+        *problem_counts
+            .entry(problem_for_pos_full(&s.position_full))
+            .or_insert(0) += 1;
     }
     let tactical_problem = problem_counts
         .into_iter()
@@ -168,14 +205,12 @@ pub fn recommend(
         .map(|s| (s.player_name.clone(), s.position.clone(), s.score))
         .collect();
 
-    // Build bench candidates with fit scores
     let target_group = problem_group(tactical_problem);
 
+    // Build bench candidates — match against full StatsBomb position strings
     let mut bring_on: Vec<BenchCandidate> = bench_players
         .iter()
         .map(|p| {
-            let abbrev = abbrev_position(&p.position).to_string();
-
             let total_actions = state
                 .events
                 .iter()
@@ -213,13 +248,16 @@ pub fn recommend(
                 })
                 .count() as u32;
 
-            let position_match = pos_group(&abbrev) == target_group;
-            let fit_score =
-                if position_match { 2.0 } else { 0.0 } + if total_actions > 0 { 1.0 } else { 0.0 };
+            let position_match = pos_group_full(&p.position) == target_group;
+            // +2.0 position match, +0.5 warmup bonus for any prior events
+            let fit_score = if position_match { 2.0 } else { 0.0 }
+                + if total_actions > 0 { 0.5 } else { 0.0 };
 
             BenchCandidate {
                 player_name: p.player_name.clone(),
-                position: abbrev,
+                position: abbrev_position(&p.position).to_string(),
+                position_full: p.position.clone(),
+                jersey_number: p.jersey_number,
                 total_actions,
                 press_count,
                 duel_won_count,
@@ -228,11 +266,38 @@ pub fn recommend(
         })
         .collect();
 
-    bring_on.sort_by(|a, b| {
-        b.fit_score
-            .partial_cmp(&a.fit_score)
-            .unwrap_or(std::cmp::Ordering::Equal)
-    });
+    if verbose {
+        println!("\n  [debug] bench candidates (pre-sort):");
+        for c in &bring_on {
+            println!(
+                "    {:<30} | pos: {:<5} | group: {:<12} | target: {:<12} | fit: {:.1}",
+                c.player_name,
+                c.position,
+                pos_group_full(&c.position_full),
+                target_group,
+                c.fit_score
+            );
+        }
+    }
+
+    let all_zero = bring_on.iter().all(|c| c.fit_score == 0.0);
+
+    if all_zero {
+        // No position match — rank by freshness (fewer actions = more rested), then jersey number
+        bring_on.sort_by(|a, b| {
+            a.total_actions
+                .cmp(&b.total_actions)
+                .then_with(|| a.jersey_number.cmp(&b.jersey_number))
+        });
+    } else {
+        // fit_score desc, jersey number asc as tiebreak
+        bring_on.sort_by(|a, b| {
+            b.fit_score
+                .partial_cmp(&a.fit_score)
+                .unwrap_or(std::cmp::Ordering::Equal)
+                .then_with(|| a.jersey_number.cmp(&b.jersey_number))
+        });
+    }
 
     Some(Recommendation {
         tactical_problem: tactical_problem.to_string(),

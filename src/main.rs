@@ -24,6 +24,10 @@ struct Args {
     /// Simulate current match minute for decay scoring (default 90)
     #[arg(long, default_value_t = 90)]
     minute: u32,
+
+    /// Print debug info for bench candidate scoring
+    #[arg(long, default_value_t = false)]
+    verbose: bool,
 }
 
 fn main() -> Result<()> {
@@ -71,6 +75,18 @@ fn main() -> Result<()> {
             return Ok(());
         }
 
+        // Build subbed-off set for the decay table marker
+        let subbed_off: std::collections::HashSet<&str> = state
+            .events
+            .iter()
+            .filter(|e| {
+                e.event_type == "Substitution"
+                    && e.team_name.eq_ignore_ascii_case(team)
+                    && e.minute <= args.minute
+            })
+            .filter_map(|e| e.player_name.as_deref())
+            .collect();
+
         println!(
             "\nDecay scores for '{}' at minute {} (highest decay first):",
             team, args.minute
@@ -80,21 +96,41 @@ fn main() -> Result<()> {
             "PLAYER", "POS", "BASELINE APM", "RECENT APM", "DECAY"
         );
         println!("{}", "-".repeat(65));
+        let mut any_subbed = false;
         for s in &scores {
-            let name = if s.player_name.chars().count() > 22 {
-                let cut: String = s.player_name.chars().take(21).collect();
+            let is_subbed = subbed_off.contains(s.player_name.as_str());
+            if is_subbed {
+                any_subbed = true;
+            }
+            // Reserve 2 chars for " *" marker on subbed players
+            let (char_limit, ellipsis_at) = if is_subbed { (20, 19) } else { (22, 21) };
+            let base = if s.player_name.chars().count() > char_limit {
+                let cut: String = s.player_name.chars().take(ellipsis_at).collect();
                 format!("{}…", cut)
             } else {
                 s.player_name.clone()
             };
+            let display = if is_subbed {
+                format!("{} *", base)
+            } else {
+                base
+            };
             println!(
                 "{:<22} | {:<5} | {:>12.2} | {:>10.2} | {:>5.2}",
-                name, s.position, s.baseline_apm, s.recent_apm, s.score
+                display, s.position, s.baseline_apm, s.recent_apm, s.score
             );
+        }
+        if any_subbed {
+            println!("  * = already substituted off");
         }
 
         // Phase 3: bench matcher + recommendation card
-        if let Some(rec) = matcher::recommend(&state, team, &scores, args.minute) {
+        match matcher::recommend(&state, team, &scores, args.minute, args.verbose) {
+        None => println!(
+            "\nNo substitution recommended at minute {} — all players performing at baseline.",
+            args.minute
+        ),
+        Some(rec) => {
             let sep = "═".repeat(55);
             println!("\n{}", sep);
             println!("  SUBWATCH RECOMMENDATION — minute {}", args.minute);
@@ -126,7 +162,7 @@ fn main() -> Result<()> {
                 );
             }
             println!("{}", sep);
-        }
+        }}
     }
 
     Ok(())

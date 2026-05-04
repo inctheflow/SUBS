@@ -1,5 +1,6 @@
 use anyhow::{Context, Result};
 use serde::{Deserialize, Serialize};
+use std::collections::{HashMap, HashSet};
 use std::path::Path;
 
 // Intermediate structs for deserializing the deeply-nested StatsBomb JSON
@@ -65,6 +66,19 @@ struct RawTeamLineup {
     team_id: u32,
     team_name: String,
     lineup: Vec<RawLineupPlayer>,
+}
+
+// Minimal structs for cross-match position index scanning
+
+#[derive(Deserialize)]
+struct IdxPlayer {
+    player_name: String,
+    positions: Vec<RawPosition>,
+}
+
+#[derive(Deserialize)]
+struct IdxTeam {
+    lineup: Vec<IdxPlayer>,
 }
 
 // Public domain structs
@@ -176,6 +190,60 @@ fn parse_lineups(path: &Path) -> Result<(TeamLineup, TeamLineup)> {
     Ok((home, away))
 }
 
+// Scan other lineup files to resolve positions for bench players who have no
+// position data in this match's lineup (positions array is empty in StatsBomb
+// when a player never came on). Stops as soon as all unknowns are resolved.
+fn resolve_positions(
+    lineups_dir: &Path,
+    skip_match_id: &str,
+    unknowns: &HashSet<String>,
+) -> HashMap<String, String> {
+    let mut resolved: HashMap<String, String> = HashMap::new();
+    if unknowns.is_empty() {
+        return resolved;
+    }
+
+    let Ok(entries) = std::fs::read_dir(lineups_dir) else {
+        return resolved;
+    };
+
+    for entry in entries.flatten() {
+        if resolved.len() == unknowns.len() {
+            break;
+        }
+        let path = entry.path();
+        if path.extension().and_then(|e| e.to_str()) != Some("json") {
+            continue;
+        }
+        if path.file_stem().and_then(|s| s.to_str()) == Some(skip_match_id) {
+            continue;
+        }
+        let Ok(data) = std::fs::read_to_string(&path) else {
+            continue;
+        };
+        // Fast pre-check: skip JSON parse entirely if no unknown name appears in the file
+        if !unknowns.iter().any(|name| data.contains(name.as_str())) {
+            continue;
+        }
+        let Ok(teams) = serde_json::from_str::<Vec<IdxTeam>>(&data) else {
+            continue;
+        };
+        for team in &teams {
+            for player in &team.lineup {
+                if unknowns.contains(&player.player_name)
+                    && !resolved.contains_key(&player.player_name)
+                {
+                    if let Some(pos) = player.positions.first() {
+                        resolved.insert(player.player_name.clone(), pos.position.clone());
+                    }
+                }
+            }
+        }
+    }
+
+    resolved
+}
+
 // Public entry point
 
 pub fn load_match(data_dir: &Path, match_id: &str) -> Result<MatchState> {
@@ -184,8 +252,34 @@ pub fn load_match(data_dir: &Path, match_id: &str) -> Result<MatchState> {
 
     let events = parse_events(&events_path)
         .with_context(|| format!("loading events for match {}", match_id))?;
-    let (home_lineup, away_lineup) = parse_lineups(&lineups_path)
+    let (mut home_lineup, mut away_lineup) = parse_lineups(&lineups_path)
         .with_context(|| format!("loading lineups for match {}", match_id))?;
+
+    // Bench players who never came on have empty positions arrays in the match
+    // lineup JSON. Look them up in other matches in the dataset.
+    let unknowns: HashSet<String> = home_lineup
+        .players
+        .iter()
+        .chain(away_lineup.players.iter())
+        .filter(|p| p.position == "Unknown")
+        .map(|p| p.player_name.clone())
+        .collect();
+
+    if !unknowns.is_empty() {
+        let lineups_dir = data_dir.join("lineups");
+        let index = resolve_positions(&lineups_dir, match_id, &unknowns);
+        for player in home_lineup
+            .players
+            .iter_mut()
+            .chain(away_lineup.players.iter_mut())
+        {
+            if player.position == "Unknown" {
+                if let Some(pos) = index.get(&player.player_name) {
+                    player.position = pos.clone();
+                }
+            }
+        }
+    }
 
     Ok(MatchState {
         home_lineup,

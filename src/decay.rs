@@ -15,7 +15,8 @@ const ACTIVE_TYPES: &[&str] = &[
 #[derive(Debug)]
 pub struct DecayScore {
     pub player_name: String,
-    pub position: String,
+    pub position: String,      // abbreviated, for display
+    pub position_full: String, // full StatsBomb string, for group matching
     pub baseline_apm: f64,
     pub recent_apm: f64,
     pub score: f64,
@@ -47,6 +48,9 @@ pub fn abbrev_position(pos: &str) -> &str {
         "Left Center Forward" => "LCF",
         "Secondary Striker" => "SS",
         "Center Defensive Midfield" => "CDM",
+        "Center Attacking Midfield" => "CAM",
+        "Left Attacking Midfield" => "LAM",
+        "Right Attacking Midfield" => "RAM",
         other => other,
     }
 }
@@ -115,6 +119,7 @@ pub fn compute_decay(state: &MatchState, team: &str, current_minute: u32) -> Vec
             DecayScore {
                 player_name: p.player_name.clone(),
                 position: abbrev_position(&p.position).to_string(),
+                position_full: p.position.clone(),
                 baseline_apm,
                 recent_apm,
                 score,
