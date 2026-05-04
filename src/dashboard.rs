@@ -12,7 +12,7 @@ use ratatui::{
     layout::{Constraint, Direction, Layout, Rect},
     style::{Color, Modifier, Style},
     text::{Line, Span},
-    widgets::{Block, Borders, List, ListItem, Paragraph},
+    widgets::{Block, Borders, Paragraph},
     Frame, Terminal,
 };
 use std::{
@@ -56,34 +56,22 @@ impl App {
         Ok(())
     }
 
+    fn team_found(&self) -> bool {
+        self.state.home_lineup.team_name.eq_ignore_ascii_case(&self.team)
+            || self.state.away_lineup.team_name.eq_ignore_ascii_case(&self.team)
+    }
+
     fn opponent(&self) -> &str {
         if self.state.home_lineup.team_name.eq_ignore_ascii_case(&self.team) {
             &self.state.away_lineup.team_name
-        } else {
+        } else if self.state.away_lineup.team_name.eq_ignore_ascii_case(&self.team) {
             &self.state.home_lineup.team_name
+        } else {
+            // team not in this match — show both teams so user knows what to use
+            &self.state.away_lineup.team_name
         }
     }
 
-    fn scores(&self) -> Vec<DecayScore> {
-        decay::compute_decay(&self.state, &self.team, self.minute)
-    }
-
-    fn subbed_off(&self) -> HashSet<String> {
-        self.state
-            .events
-            .iter()
-            .filter(|e| {
-                e.event_type == "Substitution"
-                    && e.team_name.eq_ignore_ascii_case(&self.team)
-                    && e.minute <= self.minute
-            })
-            .filter_map(|e| e.player_name.clone())
-            .collect()
-    }
-
-    fn recommendation(&self, scores: &[DecayScore]) -> Option<Recommendation> {
-        matcher::recommend(&self.state, &self.team, scores, self.minute, self.verbose)
-    }
 }
 
 pub fn run(app: App) -> Result<()> {
@@ -104,11 +92,22 @@ pub fn run(app: App) -> Result<()> {
 
 fn run_loop<B: Backend>(terminal: &mut Terminal<B>, mut app: App) -> Result<()> {
     loop {
-        let scores = app.scores();
-        let subbed_off = app.subbed_off();
-        let rec = app.recommendation(&scores);
-
-        terminal.draw(|f| ui(f, &app, &scores, &subbed_off, &rec))?;
+        terminal.draw(|f| {
+            let scores = decay::compute_decay(&app.state, &app.team, app.minute);
+            let subbed_off: HashSet<String> = app
+                .state
+                .events
+                .iter()
+                .filter(|e| {
+                    e.event_type == "Substitution"
+                        && e.team_name.eq_ignore_ascii_case(&app.team)
+                        && e.minute <= app.minute
+                })
+                .filter_map(|e| e.player_name.clone())
+                .collect();
+            let rec = matcher::recommend(&app.state, &app.team, &scores, app.minute, app.verbose);
+            ui(f, &app, &scores, &subbed_off, &rec);
+        })?;
 
         if event::poll(std::time::Duration::from_millis(200))? {
             if let Event::Key(key) = event::read()? {
@@ -117,11 +116,13 @@ fn run_loop<B: Backend>(terminal: &mut Terminal<B>, mut app: App) -> Result<()> 
                     KeyCode::Char('+') | KeyCode::Char('=') => {
                         if app.minute < 120 {
                             app.minute += 1;
+                            app.scroll = 0;
                         }
                     }
                     KeyCode::Char('-') => {
                         if app.minute > 1 {
                             app.minute -= 1;
+                            app.scroll = 0;
                         }
                     }
                     KeyCode::Char('r') | KeyCode::Char('R') => {
@@ -152,27 +153,37 @@ fn ui(
 ) {
     let size = f.size();
 
-    let title_area = Rect::new(0, 0, size.width, 2);
-    let footer_area = Rect::new(0, size.height.saturating_sub(2), size.width, 2);
+    // Title
+    let title_area = Rect::new(0, 0, size.width, 1);
+    let (title, title_style) = if app.team_found() {
+        let opponent = app.opponent();
+        (
+            format!(" SUBWATCH • {} vs {} • Minute: {} ", app.team, opponent, app.minute),
+            Style::default().fg(Color::White).add_modifier(Modifier::BOLD),
+        )
+    } else {
+        (
+            format!(
+                " SUBWATCH • Team '{}' not found — this match: {} vs {} ",
+                app.team,
+                app.state.home_lineup.team_name,
+                app.state.away_lineup.team_name,
+            ),
+            Style::default().fg(Color::Red).add_modifier(Modifier::BOLD),
+        )
+    };
+    let title_widget = Paragraph::new(title).style(title_style);
+    f.render_widget(title_widget, title_area);
 
-    let opponent = app.opponent();
-    let title = format!(
-        " SUBWATCH • {} vs {} • Minute: {} ",
-        app.team, opponent, app.minute
-    );
-    let title_block = Paragraph::new(title)
-        .style(Style::default().fg(Color::White).add_modifier(Modifier::BOLD))
-        .block(Block::default().borders(Borders::BOTTOM));
-    f.render_widget(title_block, title_area);
-
-    let footer_text = " [q] quit  [+] minute+1  [-] minute-1  [r] reload  [↑↓] scroll ";
-    let footer = Paragraph::new(footer_text)
-        .style(Style::default().fg(Color::DarkGray))
-        .block(Block::default().borders(Borders::TOP));
+    // Footer
+    let footer_area = Rect::new(0, size.height.saturating_sub(1), size.width, 1);
+    let footer = Paragraph::new(" [q] quit  [+] minute+1  [-] minute-1  [r] reload  [↑↓] scroll ")
+        .style(Style::default().fg(Color::DarkGray));
     f.render_widget(footer, footer_area);
 
-    let content_top = 2u16;
-    let content_bottom = size.height.saturating_sub(2);
+    // Content
+    let content_top = 1u16;
+    let content_bottom = size.height.saturating_sub(1);
     if content_bottom <= content_top {
         return;
     }
@@ -212,58 +223,76 @@ fn render_decay(
     area: Rect,
 ) {
     let block = Block::default()
-        .title(" Decay Scores (fatigue) ")
+        .title(format!(" Decay Scores ({}) ", scores.len()))
         .borders(Borders::ALL);
     let inner = block.inner(area);
     f.render_widget(block, area);
 
-    // fixed cols: pos(5) + space(1) + score(4) + space(1) + bar(4) + space(1) = 16
-    // plus 2 for marker " *" on subbed players — handled in name truncation
-    let fixed_cols: u16 = 16;
-    let name_width = (inner.width as i32 - fixed_cols as i32).max(8) as usize;
+    if inner.width == 0 || inner.height == 0 {
+        return;
+    }
 
-    let header = Line::from(vec![
+    if scores.is_empty() {
+        let msg = Paragraph::new(format!(
+            "Team not found in match. Use: --team \"{}\" or --team \"{}\"",
+            app.state.home_lineup.team_name, app.state.away_lineup.team_name,
+        ))
+        .style(Style::default().fg(Color::Red));
+        f.render_widget(msg, inner);
+        return;
+    }
+
+    // pos(5) + space(1) + score(4) + space(1) + bar(4) = 15; name gets the rest
+    let fixed: usize = 15;
+    let name_width = (inner.width as usize).saturating_sub(fixed).max(8);
+
+    let mut lines: Vec<Line> = Vec::new();
+
+    // Header
+    lines.push(Line::from(vec![
         Span::styled(
-            format!("{:<width$} ", "PLAYER", width = name_width),
-            Style::default().add_modifier(Modifier::BOLD),
+            format!("{:<nw$} ", "PLAYER", nw = name_width),
+            Style::default().add_modifier(Modifier::BOLD).fg(Color::White),
         ),
-        Span::styled("POS   ", Style::default().add_modifier(Modifier::BOLD)),
-        Span::styled(" DEC ", Style::default().add_modifier(Modifier::BOLD)),
-        Span::styled("BAR ", Style::default().add_modifier(Modifier::BOLD)),
-    ]);
+        Span::styled(
+            format!("{:<5} ", "POS"),
+            Style::default().add_modifier(Modifier::BOLD).fg(Color::White),
+        ),
+        Span::styled(
+            format!("{:>4} ", "DEC"),
+            Style::default().add_modifier(Modifier::BOLD).fg(Color::White),
+        ),
+        Span::styled(
+            "BAR",
+            Style::default().add_modifier(Modifier::BOLD).fg(Color::White),
+        ),
+    ]));
 
-    let visible_height = inner.height.saturating_sub(1) as usize;
     let scroll = app.scroll.min(scores.len().saturating_sub(1));
 
-    let mut items: Vec<ListItem> = vec![ListItem::new(header)];
-
-    for score in scores.iter().skip(scroll).take(visible_height) {
+    for score in scores.iter().skip(scroll) {
         let is_subbed = subbed_off.contains(&score.player_name);
-        let marker_len: usize = if is_subbed { 2 } else { 0 };
-        let char_limit = name_width.saturating_sub(marker_len);
-        let ellipsis_at = char_limit.saturating_sub(1);
+        let marker = if is_subbed { " *" } else { "" };
+        let marker_len = marker.chars().count();
+        let available = name_width.saturating_sub(marker_len);
+        let ellipsis_at = available.saturating_sub(1);
 
-        let base: String = if score.player_name.chars().count() > char_limit {
+        let base: String = if score.player_name.chars().count() > available {
             let cut: String = score.player_name.chars().take(ellipsis_at).collect();
             format!("{}…", cut)
         } else {
             score.player_name.clone()
         };
 
-        let display_name = if is_subbed {
-            format!("{} *", base)
-        } else {
-            base
-        };
-
+        let display_name = format!("{}{}", base, marker);
         let bar = bar_for_score(score.score);
-        let text_color = if is_subbed { Color::DarkGray } else { Color::White };
-        let score_color = if is_subbed { Color::DarkGray } else { score_color(score.score) };
+        let color = if is_subbed { Color::DarkGray } else { score_color(score.score) };
+        let name_color = if is_subbed { Color::DarkGray } else { Color::White };
 
-        let row = Line::from(vec![
+        lines.push(Line::from(vec![
             Span::styled(
-                format!("{:<width$} ", display_name, width = name_width),
-                Style::default().fg(text_color),
+                format!("{:<nw$} ", display_name, nw = name_width),
+                Style::default().fg(name_color),
             ),
             Span::styled(
                 format!("{:<5} ", score.position),
@@ -271,16 +300,14 @@ fn render_decay(
             ),
             Span::styled(
                 format!("{:>4.2} ", score.score),
-                Style::default().fg(score_color),
+                Style::default().fg(color),
             ),
-            Span::styled(bar, Style::default().fg(score_color)),
-        ]);
-
-        items.push(ListItem::new(row));
+            Span::styled(bar, Style::default().fg(color)),
+        ]));
     }
 
-    let list = List::new(items);
-    f.render_widget(list, inner);
+    let paragraph = Paragraph::new(lines);
+    f.render_widget(paragraph, inner);
 }
 
 fn render_recommendation(
@@ -294,7 +321,7 @@ fn render_recommendation(
     let inner = block.inner(area);
     f.render_widget(block, area);
 
-    let mut lines: Vec<Line> = vec![];
+    let mut lines: Vec<Line> = Vec::new();
 
     match rec {
         None => {
@@ -308,17 +335,24 @@ fn render_recommendation(
         }
         Some(r) => {
             lines.push(Line::from(vec![
-                Span::styled("TACTICAL PROBLEM: ", Style::default().add_modifier(Modifier::BOLD)),
+                Span::styled(
+                    "TACTICAL PROBLEM: ",
+                    Style::default().add_modifier(Modifier::BOLD),
+                ),
                 Span::styled(
                     r.tactical_problem.as_str(),
-                    Style::default().fg(Color::Yellow).add_modifier(Modifier::BOLD),
+                    Style::default()
+                        .fg(Color::Yellow)
+                        .add_modifier(Modifier::BOLD),
                 ),
             ]));
 
-            lines.push(Line::from(Span::raw("")));
+            lines.push(Line::from(""));
             lines.push(Line::from(Span::styled(
                 "TAKE OFF:",
-                Style::default().add_modifier(Modifier::BOLD).fg(Color::Red),
+                Style::default()
+                    .add_modifier(Modifier::BOLD)
+                    .fg(Color::Red),
             )));
 
             for (i, (name, pos, decay)) in r.take_off.iter().enumerate() {
@@ -329,44 +363,51 @@ fn render_recommendation(
                 ]));
             }
 
-            lines.push(Line::from(Span::raw("")));
+            lines.push(Line::from(""));
             lines.push(Line::from(Span::styled(
                 "BRING ON:",
-                Style::default().add_modifier(Modifier::BOLD).fg(Color::Cyan),
+                Style::default()
+                    .add_modifier(Modifier::BOLD)
+                    .fg(Color::Cyan),
             )));
 
             let candidates: Vec<_> = r.bring_on.iter().take(3).collect();
-            for (i, c) in candidates.iter().enumerate() {
-                let is_best = i == 0;
-                let suffix = if is_best {
-                    "  [BEST MATCH]"
-                } else if i == 2 {
-                    "  (if available)"
-                } else {
-                    ""
-                };
-
-                let name_style = if is_best {
-                    Style::default().fg(Color::Cyan).add_modifier(Modifier::BOLD)
-                } else {
-                    Style::default().fg(Color::Gray)
-                };
-
-                lines.push(Line::from(vec![
-                    Span::raw(format!("  {}. ", i + 1)),
-                    Span::styled(c.player_name.as_str(), name_style),
-                    Span::styled(
-                        format!(" ({}) — fit {:.1}{}", c.position, c.fit_score, suffix),
-                        Style::default().fg(if is_best { Color::Cyan } else { Color::Gray }),
-                    ),
-                ]));
-            }
-
-            if r.bring_on.is_empty() {
+            if candidates.is_empty() {
                 lines.push(Line::from(Span::styled(
                     "  No bench players available.",
                     Style::default().fg(Color::DarkGray),
                 )));
+            } else {
+                for (i, c) in candidates.iter().enumerate() {
+                    let is_best = i == 0;
+                    let suffix = if is_best {
+                        "  [BEST MATCH]"
+                    } else if i == 2 {
+                        "  (if available)"
+                    } else {
+                        ""
+                    };
+
+                    let style = if is_best {
+                        Style::default()
+                            .fg(Color::Cyan)
+                            .add_modifier(Modifier::BOLD)
+                    } else {
+                        Style::default().fg(Color::Gray)
+                    };
+
+                    lines.push(Line::from(vec![
+                        Span::raw(format!("  {}. ", i + 1)),
+                        Span::styled(c.player_name.as_str(), style),
+                        Span::styled(
+                            format!(
+                                " ({}) — fit {:.1}{}",
+                                c.position, c.fit_score, suffix
+                            ),
+                            style,
+                        ),
+                    ]));
+                }
             }
         }
     }
