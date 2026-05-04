@@ -21,7 +21,7 @@ pub struct DecayScore {
     pub score: f64,
 }
 
-fn abbrev_position(pos: &str) -> &str {
+pub fn abbrev_position(pos: &str) -> &str {
     match pos {
         "Goalkeeper" => "GK",
         "Right Back" => "RB",

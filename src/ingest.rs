@@ -16,6 +16,18 @@ struct PlayerRef {
 }
 
 #[derive(Deserialize)]
+struct RawSubstitution {
+    #[allow(dead_code)]
+    outcome: NamedObject,
+    replacement: PlayerRef,
+}
+
+#[derive(Deserialize)]
+struct RawDuel {
+    outcome: Option<NamedObject>,
+}
+
+#[derive(Deserialize)]
 struct RawEvent {
     id: String,
     index: u32,
@@ -29,6 +41,8 @@ struct RawEvent {
     player: Option<PlayerRef>,
     location: Option<[f64; 2]>,
     under_pressure: Option<bool>,
+    substitution: Option<RawSubstitution>,
+    duel: Option<RawDuel>,
 }
 
 // Lineup raw structs
@@ -68,6 +82,10 @@ pub struct MatchEvent {
     pub team_name: String,
     pub location: Option<[f64; 2]>,
     pub under_pressure: Option<bool>,
+    // name of the player coming ON (populated for Substitution events only)
+    pub substitution_player_on: Option<String>,
+    // outcome of the duel (e.g. "Won", "Lost") for Duel events
+    pub duel_outcome: Option<String>,
 }
 
 #[derive(Debug, Serialize)]
@@ -114,6 +132,8 @@ fn parse_events(path: &Path) -> Result<Vec<MatchEvent>> {
             team_name: e.team.name,
             location: e.location,
             under_pressure: e.under_pressure,
+            substitution_player_on: e.substitution.map(|s| s.replacement.name),
+            duel_outcome: e.duel.and_then(|d| d.outcome).map(|o| o.name),
         })
         .collect())
 }
