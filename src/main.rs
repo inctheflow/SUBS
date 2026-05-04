@@ -1,3 +1,4 @@
+mod dashboard;
 mod decay;
 mod ingest;
 mod matcher;
@@ -28,10 +29,29 @@ struct Args {
     /// Print debug info for bench candidate scoring
     #[arg(long, default_value_t = false)]
     verbose: bool,
+
+    /// Launch full-screen terminal dashboard
+    #[arg(long, default_value_t = false)]
+    dashboard: bool,
 }
 
 fn main() -> Result<()> {
     let args = Args::parse();
+
+    if args.dashboard {
+        let team = args.team.unwrap_or_else(|| {
+            eprintln!("--dashboard requires --team");
+            std::process::exit(1);
+        });
+        let app = dashboard::App::new(
+            args.data_dir,
+            args.match_id,
+            team,
+            args.minute,
+            args.verbose,
+        )?;
+        return dashboard::run(app);
+    }
 
     let state = ingest::load_match(&args.data_dir, &args.match_id)?;
 
