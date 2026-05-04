@@ -2,9 +2,7 @@ use anyhow::{Context, Result};
 use serde::{Deserialize, Serialize};
 use std::path::Path;
 
-// ---------------------------------------------------------------------------
 // Intermediate structs for deserializing the deeply-nested StatsBomb JSON
-// ---------------------------------------------------------------------------
 
 #[derive(Deserialize)]
 struct NamedObject {
@@ -33,9 +31,7 @@ struct RawEvent {
     under_pressure: Option<bool>,
 }
 
-// ---------------------------------------------------------------------------
 // Lineup raw structs
-// ---------------------------------------------------------------------------
 
 #[derive(Deserialize)]
 struct RawPosition {
@@ -57,9 +53,7 @@ struct RawTeamLineup {
     lineup: Vec<RawLineupPlayer>,
 }
 
-// ---------------------------------------------------------------------------
 // Public domain structs
-// ---------------------------------------------------------------------------
 
 #[derive(Debug, Serialize)]
 pub struct MatchEvent {
@@ -98,9 +92,7 @@ pub struct MatchState {
     pub events: Vec<MatchEvent>,
 }
 
-// ---------------------------------------------------------------------------
 // Parsing helpers
-// ---------------------------------------------------------------------------
 
 fn parse_events(path: &Path) -> Result<Vec<MatchEvent>> {
     let data = std::fs::read_to_string(path)
@@ -164,9 +156,7 @@ fn parse_lineups(path: &Path) -> Result<(TeamLineup, TeamLineup)> {
     Ok((home, away))
 }
 
-// ---------------------------------------------------------------------------
 // Public entry point
-// ---------------------------------------------------------------------------
 
 pub fn load_match(data_dir: &Path, match_id: &str) -> Result<MatchState> {
     let events_path = data_dir.join("events").join(format!("{}.json", match_id));
