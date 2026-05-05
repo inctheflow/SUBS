@@ -88,6 +88,8 @@ Sergio Busquets        | CDM   |          0.84 |        0.21 |  0.75
 
 Live full-screen terminal UI with real-time minute adjustment:
 
+![subwatch dashboard](assets/demo.png)
+
 ```bash
 cargo run -- --match-id 69225 --team "Barcelona" --minute 60 --dashboard
 ```
