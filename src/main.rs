@@ -8,7 +8,7 @@ use clap::Parser;
 use std::path::PathBuf;
 
 #[derive(Parser)]
-#[command(name = "subwatch", about = "StatsBomb match analysis tool")]
+#[command(name = "subs", about = "StatsBomb match analysis tool")]
 struct Args {
     /// Match ID to load
     #[arg(long)]
@@ -171,7 +171,7 @@ fn main() -> Result<()> {
         Some(rec) => {
             let sep = "═".repeat(55);
             println!("\n{}", sep);
-            println!("  SUBWATCH RECOMMENDATION — minute {}", args.minute);
+            println!("  SUBS RECOMMENDATION — minute {}", args.minute);
             println!("{}", sep);
             println!("  TACTICAL PROBLEM: {}", rec.tactical_problem);
 

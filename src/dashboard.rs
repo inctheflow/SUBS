@@ -171,13 +171,13 @@ fn ui(
     let (title, title_style) = if app.team_found() {
         let opponent = app.opponent();
         (
-            format!(" SUBWATCH • {} vs {} • Minute: {} ", app.team, opponent, app.minute),
+            format!(" SUBS • {} vs {} • Minute: {} ", app.team, opponent, app.minute),
             Style::default().fg(Color::White).add_modifier(Modifier::BOLD),
         )
     } else {
         (
             format!(
-                " SUBWATCH • Team '{}' not found — this match: {} vs {} ",
+                " SUBS • Team '{}' not found — this match: {} vs {} ",
                 app.team,
                 app.state.home_lineup.team_name,
                 app.state.away_lineup.team_name,

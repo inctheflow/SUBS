@@ -171,7 +171,8 @@ pub fn compute_decay(
             };
             let recent_apm = recent_counts.get(name).copied().unwrap_or(0) as f64 / recent_duration;
             let has_played = match_counts.get(name).copied().unwrap_or(0) > 0;
-            let score = if baseline_apm == 0.0 || !has_played {
+            let is_gk = p.position == "Goalkeeper";
+            let score = if baseline_apm == 0.0 || !has_played || is_gk {
                 0.0
             } else {
                 1.0 - (recent_apm / baseline_apm).min(1.0)
