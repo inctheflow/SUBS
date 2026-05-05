@@ -81,6 +81,25 @@ struct IdxTeam {
     lineup: Vec<IdxPlayer>,
 }
 
+// Minimal structs for scanning the matches index
+
+#[derive(Deserialize)]
+struct RawMatchHomeTeam {
+    home_team_name: String,
+}
+
+#[derive(Deserialize)]
+struct RawMatchAwayTeam {
+    away_team_name: String,
+}
+
+#[derive(Deserialize)]
+struct RawMatchIndex {
+    match_id: u32,
+    home_team: RawMatchHomeTeam,
+    away_team: RawMatchAwayTeam,
+}
+
 // Public domain structs
 
 #[derive(Debug, Serialize)]
@@ -244,7 +263,59 @@ fn resolve_positions(
     resolved
 }
 
-// Public entry point
+// Public entry point — events only (no lineup resolution, used for season baseline)
+
+pub fn load_events_only(data_dir: &Path, match_id: &str) -> Result<Vec<MatchEvent>> {
+    let events_path = data_dir.join("events").join(format!("{}.json", match_id));
+    parse_events(&events_path)
+}
+
+// Scan the matches index to find all match IDs where `team` played, excluding `exclude_match_id`.
+pub fn find_team_match_ids(data_dir: &Path, team: &str, exclude_match_id: &str) -> Vec<String> {
+    let matches_dir = data_dir.join("matches");
+    let mut ids = Vec::new();
+
+    let Ok(competitions) = std::fs::read_dir(&matches_dir) else {
+        return ids;
+    };
+
+    for comp_entry in competitions.flatten() {
+        let comp_path = comp_entry.path();
+        if !comp_path.is_dir() {
+            continue;
+        }
+        let Ok(seasons) = std::fs::read_dir(&comp_path) else {
+            continue;
+        };
+        for season_entry in seasons.flatten() {
+            let path = season_entry.path();
+            if path.extension().and_then(|e| e.to_str()) != Some("json") {
+                continue;
+            }
+            let Ok(data) = std::fs::read_to_string(&path) else {
+                continue;
+            };
+            if !data.contains(team) {
+                continue;
+            }
+            let Ok(matches) = serde_json::from_str::<Vec<RawMatchIndex>>(&data) else {
+                continue;
+            };
+            for m in matches {
+                let mid = m.match_id.to_string();
+                if mid == exclude_match_id {
+                    continue;
+                }
+                if m.home_team.home_team_name.eq_ignore_ascii_case(team)
+                    || m.away_team.away_team_name.eq_ignore_ascii_case(team)
+                {
+                    ids.push(mid);
+                }
+            }
+        }
+    }
+    ids
+}
 
 pub fn load_match(data_dir: &Path, match_id: &str) -> Result<MatchState> {
     let events_path = data_dir.join("events").join(format!("{}.json", match_id));

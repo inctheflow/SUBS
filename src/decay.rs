@@ -1,5 +1,6 @@
 use crate::ingest::{MatchState, TeamLineup};
 use std::collections::HashMap;
+use std::path::Path;
 
 const ACTIVE_TYPES: &[&str] = &[
     "Pass",
@@ -65,7 +66,57 @@ fn find_lineup<'a>(state: &'a MatchState, team: &str) -> Option<&'a TeamLineup> 
     }
 }
 
-pub fn compute_decay(state: &MatchState, team: &str, current_minute: u32) -> Vec<DecayScore> {
+/// Build a season-wide APM baseline for each player from historical matches.
+/// For each match, counts active events per player and divides by 90 to get APM,
+/// then averages across all matches the player appeared in.
+pub fn build_season_baseline(
+    data_dir: &Path,
+    team: &str,
+    match_ids: &[String],
+) -> HashMap<String, f64> {
+    // player_name -> (total_active_events, matches_appeared_in)
+    let mut totals: HashMap<String, (u32, u32)> = HashMap::new();
+
+    for match_id in match_ids {
+        let Ok(events) = crate::ingest::load_events_only(data_dir, match_id) else {
+            continue;
+        };
+        let mut per_match: HashMap<String, u32> = HashMap::new();
+        for event in &events {
+            if !event.team_name.eq_ignore_ascii_case(team) {
+                continue;
+            }
+            if !ACTIVE_TYPES.contains(&event.event_type.as_str()) {
+                continue;
+            }
+            let Some(player) = &event.player_name else {
+                continue;
+            };
+            *per_match.entry(player.clone()).or_insert(0) += 1;
+        }
+        for (player, count) in per_match {
+            let entry = totals.entry(player).or_insert((0, 0));
+            entry.0 += count;
+            entry.1 += 1;
+        }
+    }
+
+    totals
+        .into_iter()
+        .map(|(player, (total, count))| (player, total as f64 / (count as f64 * 90.0)))
+        .collect()
+}
+
+/// Compute per-player decay scores.
+/// If `season_baseline` is provided, each player's baseline APM is taken from
+/// their historical season average rather than the current match's first half.
+/// Falls back to within-match baseline for players absent from the history.
+pub fn compute_decay(
+    state: &MatchState,
+    team: &str,
+    current_minute: u32,
+    season_baseline: Option<&HashMap<String, f64>>,
+) -> Vec<DecayScore> {
     let baseline_end = (current_minute as f64 / 2.0).min(45.0);
     let recent_start = (current_minute as f64 - 15.0).max(0.0);
     let baseline_duration = baseline_end;
@@ -104,10 +155,15 @@ pub fn compute_decay(state: &MatchState, team: &str, current_minute: u32) -> Vec
         .iter()
         .map(|p| {
             let name = p.player_name.as_str();
-            let baseline_apm = if baseline_duration > 0.0 {
-                baseline_counts.get(name).copied().unwrap_or(0) as f64 / baseline_duration
-            } else {
-                0.0
+            let baseline_apm = match season_baseline.and_then(|sb| sb.get(name).copied()) {
+                Some(apm) => apm,
+                None => {
+                    if baseline_duration > 0.0 {
+                        baseline_counts.get(name).copied().unwrap_or(0) as f64 / baseline_duration
+                    } else {
+                        0.0
+                    }
+                }
             };
             let recent_apm = recent_counts.get(name).copied().unwrap_or(0) as f64 / recent_duration;
             let score = if baseline_apm == 0.0 {

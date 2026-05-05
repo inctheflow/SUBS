@@ -16,7 +16,7 @@ use ratatui::{
     Frame, Terminal,
 };
 use std::{
-    collections::HashSet,
+    collections::{HashMap, HashSet},
     io,
     path::PathBuf,
 };
@@ -29,6 +29,7 @@ pub struct App {
     pub scroll: usize,
     pub verbose: bool,
     state: MatchState,
+    season_baseline: Option<HashMap<String, f64>>,
 }
 
 impl App {
@@ -38,8 +39,19 @@ impl App {
         team: String,
         minute: u32,
         verbose: bool,
+        use_season_baseline: bool,
     ) -> Result<Self> {
         let state = ingest::load_match(&data_dir, &match_id)?;
+        let season_baseline = if use_season_baseline {
+            let ids = ingest::find_team_match_ids(&data_dir, &team, &match_id);
+            if ids.is_empty() {
+                None
+            } else {
+                Some(decay::build_season_baseline(&data_dir, &team, &ids))
+            }
+        } else {
+            None
+        };
         Ok(Self {
             data_dir,
             match_id,
@@ -48,6 +60,7 @@ impl App {
             scroll: 0,
             verbose,
             state,
+            season_baseline,
         })
     }
 
@@ -93,7 +106,7 @@ pub fn run(app: App) -> Result<()> {
 fn run_loop<B: Backend>(terminal: &mut Terminal<B>, mut app: App) -> Result<()> {
     loop {
         terminal.draw(|f| {
-            let scores = decay::compute_decay(&app.state, &app.team, app.minute);
+            let scores = decay::compute_decay(&app.state, &app.team, app.minute, app.season_baseline.as_ref());
             let subbed_off: HashSet<String> = app
                 .state
                 .events

@@ -33,6 +33,10 @@ struct Args {
     /// Launch full-screen terminal dashboard
     #[arg(long, default_value_t = false)]
     dashboard: bool,
+
+    /// Use season-wide APM baseline built from all historical matches for the team
+    #[arg(long, default_value_t = false)]
+    season_baseline: bool,
 }
 
 fn main() -> Result<()> {
@@ -49,6 +53,7 @@ fn main() -> Result<()> {
             team,
             args.minute,
             args.verbose,
+            args.season_baseline,
         )?;
         return dashboard::run(app);
     }
@@ -88,7 +93,20 @@ fn main() -> Result<()> {
 
     // Phase 2: decay engine
     if let Some(ref team) = args.team {
-        let scores = decay::compute_decay(&state, team, args.minute);
+        let season_bl = if args.season_baseline {
+            let match_ids = ingest::find_team_match_ids(&args.data_dir, team, &args.match_id);
+            if match_ids.is_empty() {
+                eprintln!("No historical matches found for '{}' — falling back to within-match baseline.", team);
+                None
+            } else {
+                println!("Building season baseline from {} matches…", match_ids.len());
+                Some(decay::build_season_baseline(&args.data_dir, team, &match_ids))
+            }
+        } else {
+            None
+        };
+
+        let scores = decay::compute_decay(&state, team, args.minute, season_bl.as_ref());
 
         if scores.is_empty() {
             println!("\nNo lineup found for team '{}'.", team);
