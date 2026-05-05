@@ -129,6 +129,7 @@ pub fn compute_decay(
 
     let mut baseline_counts: HashMap<&str, u32> = HashMap::new();
     let mut recent_counts: HashMap<&str, u32> = HashMap::new();
+    let mut match_counts: HashMap<&str, u32> = HashMap::new();
 
     for event in &state.events {
         if !event.team_name.eq_ignore_ascii_case(team) {
@@ -142,6 +143,9 @@ pub fn compute_decay(
             None => continue,
         };
         let min = event.minute as f64;
+        if min <= current_minute as f64 {
+            *match_counts.entry(player).or_insert(0) += 1;
+        }
         if min <= baseline_end {
             *baseline_counts.entry(player).or_insert(0) += 1;
         }
@@ -166,7 +170,8 @@ pub fn compute_decay(
                 }
             };
             let recent_apm = recent_counts.get(name).copied().unwrap_or(0) as f64 / recent_duration;
-            let score = if baseline_apm == 0.0 {
+            let has_played = match_counts.get(name).copied().unwrap_or(0) > 0;
+            let score = if baseline_apm == 0.0 || !has_played {
                 0.0
             } else {
                 1.0 - (recent_apm / baseline_apm).min(1.0)
