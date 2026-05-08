@@ -1,5 +1,6 @@
 mod dashboard;
 mod decay;
+mod export;
 mod ingest;
 mod matcher;
 
@@ -37,10 +38,28 @@ struct Args {
     /// Use season-wide APM baseline built from all historical matches for the team
     #[arg(long, default_value_t = false)]
     season_baseline: bool,
+
+    /// Export report after analysis: 'md' for Markdown, 'pdf' for PDF
+    #[arg(long, value_name = "FORMAT")]
+    export: Option<String>,
 }
 
 fn main() -> Result<()> {
     let args = Args::parse();
+
+    if let Some(ref fmt) = args.export {
+        match fmt.as_str() {
+            "md" | "pdf" => {}
+            other => {
+                eprintln!("Unknown export format '{}' — use 'md' or 'pdf'", other);
+                std::process::exit(1);
+            }
+        }
+        if args.team.is_none() {
+            eprintln!("--export requires --team");
+            std::process::exit(1);
+        }
+    }
 
     if args.dashboard {
         let team = args.team.unwrap_or_else(|| {
@@ -163,7 +182,9 @@ fn main() -> Result<()> {
         }
 
         // Phase 3: bench matcher + recommendation card
-        match matcher::recommend(&state, team, &scores, args.minute, args.verbose) {
+        let recommendation = matcher::recommend(&state, team, &scores, args.minute, args.verbose);
+
+        match &recommendation {
         None => println!(
             "\nNo substitution recommended at minute {} — all players performing at baseline.",
             args.minute
@@ -201,6 +222,45 @@ fn main() -> Result<()> {
             }
             println!("{}", sep);
         }}
+
+        // Export report if requested
+        if let Some(ref fmt) = args.export {
+            let timestamp = chrono::Local::now().format("%Y-%m-%d %H:%M:%S").to_string();
+            let team_slug = team.replace(' ', "_");
+            let filename = format!(
+                "subs_{}_{}_min{}.{}",
+                args.match_id, team_slug, args.minute, fmt
+            );
+            let export_path = std::path::PathBuf::from(&filename);
+            let subbed_off_owned: std::collections::HashSet<String> =
+                subbed_off.iter().map(|s| s.to_string()).collect();
+
+            match fmt.as_str() {
+                "md" => export::export_markdown(
+                    &export_path,
+                    &args.match_id,
+                    team,
+                    args.minute,
+                    &timestamp,
+                    &scores,
+                    &subbed_off_owned,
+                    recommendation.as_ref(),
+                )?,
+                "pdf" => export::export_pdf(
+                    &export_path,
+                    &args.match_id,
+                    team,
+                    args.minute,
+                    &timestamp,
+                    &scores,
+                    &subbed_off_owned,
+                    recommendation.as_ref(),
+                )?,
+                _ => unreachable!(),
+            }
+
+            println!("\nReport saved: {}", filename);
+        }
     }
 
     Ok(())
